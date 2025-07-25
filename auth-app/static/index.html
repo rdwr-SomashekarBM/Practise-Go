@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Go Chat App</title>
+    <style>
+        body { font-family: Arial; margin: 0; padding: 20px; }
+        #chat { display: flex; gap: 20px; }
+        #users { width: 200px; }
+        #messages { flex-grow: 1; border: 1px solid #ccc; padding: 10px; height: 300px; overflow-y: scroll; }
+        #input { margin-top: 10px; }
+        .me { color: green; }
+        .them { color: blue; }
+    </style>
+</head>
+<body>
+<h2>Direct Message Chat</h2>
+
+<div id="chat">
+    <div id="users">
+        <h4>Users</h4>
+        <ul id="userList"></ul>
+    </div>
+
+    <div>
+        <div id="messages"></div>
+        <div id="input">
+            <input type="text" id="messageInput" placeholder="Type a message..." />
+            <button onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    let socket;
+    let currentUserId = null;
+    let selectedReceiverId = null;
+    let token = localStorage.getItem("token");
+
+    const messageMap = {}; // Keeps DM history per user
+
+    async function getCurrentUser() {
+        if (!token) {
+            alert("Please login first.");
+            window.location.href = "/login.html";
+            return;
+        }
+
+        const res = await fetch("/api/me", {
+            headers: { "Authorization": `Bearer ${token}` },
+        });
+
+        if (!res.ok) {
+            alert("Invalid or expired token. Please login.");
+            window.location.href = "/login.html";
+            return;
+        }
+
+        const user = await res.json();
+        currentUserId = user.id;
+
+        loadUsers();
+        setupSocket();
+    }
+
+    function loadUsers() {
+        fetch("/api/users", {
+            headers: { "Authorization": `Bearer ${token}` },
+        })
+            .then(res => res.json())
+            .then(users => {
+                const userList = document.getElementById("userList");
+                userList.innerHTML = "";
+                users.forEach(user => {
+                    if (user.id !== currentUserId) {
+                        const li = document.createElement("li");
+                        li.textContent = user.username;
+                        li.style.cursor = "pointer";
+                        li.onclick = () => {
+                            selectedReceiverId = user.id;
+                            document.getElementById("messages").innerHTML = "";
+                            renderMessages(user.id);
+                        };
+                        userList.appendChild(li);
+                    }
+                });
+            });
+    }
+
+    function renderMessages(userId) {
+        const messagesDiv = document.getElementById("messages");
+        messagesDiv.innerHTML = "";
+        const chat = messageMap[userId] || [];
+        chat.forEach(msg => {
+            const div = document.createElement("div");
+            div.className = msg.sender_id === currentUserId ? "me" : "them";
+            div.textContent = `${msg.sender_id === currentUserId ? "You" : "Them"}: ${msg.content}`;
+            messagesDiv.appendChild(div);
+        });
+    }
+
+    function setupSocket() {
+        const socketUrl = `ws://localhost:8080/ws?token=${token}`;
+        socket = new WebSocket(socketUrl);
+
+        socket.onmessage = function (event) {
+            const msg = JSON.parse(event.data);
+            const peerId = msg.sender_id === currentUserId ? msg.receiver_id : msg.sender_id;
+
+            if (!messageMap[peerId]) messageMap[peerId] = [];
+            messageMap[peerId].push(msg);
+
+            // Update chat window only if chatting with this peer
+            if (selectedReceiverId === peerId) {
+                renderMessages(peerId);
+            }
+        };
+    }
+
+    function sendMessage() {
+        const input = document.getElementById("messageInput");
+        const content = input.value.trim();
+        if (!content || !selectedReceiverId || !socket) return;
+
+        const msg = {
+            sender_id: currentUserId,
+            receiver_id: selectedReceiverId,
+            content: content,
+        };
+
+        socket.send(JSON.stringify(msg));
+
+        if (!messageMap[selectedReceiverId]) messageMap[selectedReceiverId] = [];
+        messageMap[selectedReceiverId].push(msg);
+
+        renderMessages(selectedReceiverId);
+
+        input.value = "";
+    }
+
+    getCurrentUser();
+</script>
+</body>
+</html>
